@@ -13,7 +13,9 @@ from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
     _DEPRECATED_HVAC_MODE_OFF,
     ATTR_TARGET_TEMP_HIGH,
-    ATTR_TARGET_TEMP_LOW)
+    ATTR_TARGET_TEMP_LOW,
+    DEFAULT_MAX_TEMP,
+    DEFAULT_MIN_TEMP)
 
 from homeassistant.const import (
     ATTR_TEMPERATURE,
@@ -23,6 +25,8 @@ from homeassistant.const import (
     PRECISION_WHOLE,
     TEMP_CELSIUS,
     TEMP_FAHRENHEIT,
+    
+    
 )
 
 TEMPERATURE_CELSIUS = "celsius"
@@ -77,15 +81,29 @@ class TuyaClimate(ClimateEntity):
         self._attr_preset_modes = None
         self._fan_mode = None
         self._swing_mode = None
-        self._attr_precision = PRECISION_TENTHS
+        self._attr_precision = PRECISION_WHOLE
         self._hvac_mode = HVAC_MODE_OFF
-        self._target_temperature = 16
+        self._target_temperature = 21
         self._precision = 1
         self._attr_supported_features = SUPPORT_FLAGS
+        #ADDED For TEmperature Range
+        self._attr_max_temp=30
+        self._attr_min_temp=16
+        self.preset_mode=20
+       
+        self._current_temperature = None 
+
+
+    mode_mapping = {"dry": 4, "fan_only": 3, "auto": 2, "cool": 0, "off": 0}
+
+    @property
+    def current_temperature(self) -> float | None:
+        """Return the current temperature."""
+        return self._current_temperature
 
     @property
     def name(self):
-        return "Tuya Climate"
+        return "AIR Conditioner"
     
     @property
     def is_on(self):
@@ -103,7 +121,17 @@ class TuyaClimate(ClimateEntity):
     def target_temperature(self):
         """Return the temperature we try to reach."""
         return self._target_temperature
-
+    
+    #Both Function ADDED for Min Max Temperature
+    @property
+    def min_temp(self):
+        """Return the polling state."""
+        return self._attr_min_temp
+        
+    @property
+    def max_temp(self):
+        """Return the polling state."""
+        return self._attr_max_temp
     @property
     def target_temperature_step(self):
         """Return the supported step of target temperature."""
@@ -115,7 +143,7 @@ class TuyaClimate(ClimateEntity):
 
     @property
     def hvac_modes(self):
-        return ["heat", "cool", "auto", "off"]
+        return ["dry","fan_only", "auto", "cool", "off"]
 
     @property
     def fan_mode(self):
@@ -132,39 +160,66 @@ class TuyaClimate(ClimateEntity):
     @property
     def swing_modes(self):
         return ["on", "off"]
-    
-    # @property
-    # def temperature_unit(self, config_entry):
-    #     """Return the unit of measurement used by the platform."""
-    #     if (
-    #         self.config(CONF_TEMPERATURE_UNIT, DEFAULT_TEMPERATURE_UNIT)
-    #         == TEMPERATURE_FAHRENHEIT
-    #     ):
-    #         return TEMP_FAHRENHEIT
-    #     return TEMP_CELSIUS
+  
+    async def async_turn_on(self):
+        await self.send_command(power=1)
+        self._state = STATE_ON
+
+    async def async_turn_off(self):
+        await self.send_command(power=0)
+        self._state = STATE_OFF
+
+
+    async def async_update(self):
+        """Update the state of the Tuya AC."""
+        try:
+            # Use Tuya Open API to get the current device status
+            result = await self.hass.async_add_executor_job(
+                self._openapi.get, f"/v2.0/infrareds/d79634ca31ef0ae8807vlh/remotes/d7af1190782799d1a6fu9u/ac/status"
+            )
+            print(result)
+            # Extract relevant information from the result
+            if result.get("success", False) and result.get("result", {}):
+                status = result["result"].get("power")
+                temperature = int(result["result"].get("temp"))
+                mode = int(result["result"].get("mode"))
+
+                if not isinstance(temperature, (int, float)):
+                    _LOGGER.warning("Received invalid temperature value: %s", temperature)
+                    temperature = temperature
+                   
+                if not isinstance(mode, (int, float)):
+                    _LOGGER.warning("Received invalid temperature value: %s", temperature)
+                    mode= mode
+                # Update the internal state variables
+                if status == "on":
+                    self._state = STATE_ON
+                elif status == "off":
+                    self._state = STATE_OFF
+                
+                if temperature is not None:
+                    self._current_temperature = temperature
+               
+                
+                mode_value = self.mode_mapping.get(mode)
+                if mode_value is not None:
+                    self._hvac_mode = mode_value
+
+                
+                    
+                # Update Home Assistant state
+                self.async_write_ha_state()
+
+        except Exception as e:
+            _LOGGER.error(f"Error updating Tuya AC status: {e}")
 
     async def send_command(self, power):
         """Helper method to turn on/off the AC."""
-        # command_payload = {
-        #     "power": power,
-        #     "mode": 0,
-        #     "temp": self._target_temperature,
-        #     "wind": 3
-        # }
-        # body_json = json.dumps(command_payload)
-        # body_dict = json.loads(body_json)
-
-        # # Execute the blocking call using async_add_executor_job
-        # result = self._openapi.post(
-        #     "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command", body_dict
-        # )
-        # _LOGGER.debug(result)
+       
         try:
             command_payload = {
                 "power": power,
-                "mode": 0,
-                "temp": self._target_temperature,
-                "wind": 3
+                
             }
             body_json = json.dumps(command_payload)
             body_dict = json.loads(body_json)
@@ -177,23 +232,85 @@ class TuyaClimate(ClimateEntity):
         except Exception as e:
             _LOGGER.error(f"Error in send_command: {e}")
 
-    
+    async def async_set_hvac_mode(self, hvac_mode):
+        mode_mapping = {"dry":4,"fan_only": 3, "auto": 2, "cool": 0, "off": 0}
+        mode_value = mode_mapping.get(hvac_mode)
+        if mode_value is not None:
+            if hvac_mode == "off":
+                power = 0
+            else:
+                power = 1
+            
+            command_payload = {
+                "power": power,
+                "mode": mode_value,
+                
+            }
+            body_json = json.dumps(command_payload)
+            body_dict = json.loads(body_json)
 
-    
+            try:
+                # Execute the blocking call using async_add_executor_job
+                result = await self.hass.async_add_executor_job(
+                    self._openapi.post,
+                    "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command",
+                    body_dict
+                )
+                _LOGGER.debug(result)
+            except Exception as e:
+                _LOGGER.error(f"Error in sending HVAC mode command: {e}")
+                return
+            
+            self._hvac_mode = hvac_mode
+            self.async_write_ha_state()
+        else:
+            _LOGGER.warning("Unsupported HVAC mode: %s", hvac_mode)
+
+    async def async_set_fan_mode(self, fan_mode):
+        mode_mapping = {"low": 1, "medium": 2, "high": 3, "auto": 0,}  # Add more mappings as needed
+        mode_value = mode_mapping.get(fan_mode)
+        if mode_value is not None:
+            command_payload = {
+                "power": 1,
+                "wind": mode_value,
+                
+            }
+            body_json = json.dumps(command_payload)
+            body_dict = json.loads(body_json)
+
+            try:
+                # Execute the blocking call using async_add_executor_job
+                result = await self.hass.async_add_executor_job(
+                    self._openapi.post,
+                    "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command",
+                    body_dict
+                )
+                _LOGGER.debug(result)
+            except Exception as e:
+                _LOGGER.error(f"Error in sending fan mode command: {e}")
+                return
+            
+            self._fan_mode = fan_mode
+            self.async_write_ha_state()
+        else:
+            _LOGGER.warning("Unsupported fan mode: %s", fan_mode)
+            
     async def async_set_temperature(self, **kwargs):
         raise NotImplementedError()
 
     async def async_set_temperature(self, **kwargs):
         """Set new target temperatures."""
+        power = kwargs.get(ATTR_HVAC_MODE)
         hvac_mode = kwargs.get(ATTR_HVAC_MODE)
         temperature = kwargs.get(ATTR_TEMPERATURE)
         command_payload = {
                 "power": 1,
+                "mode":hvac_mode,
                 "temp" : temperature
             }
         body_json = json.dumps(command_payload)
         body_dict = json.loads(body_json)
-        print(temperature)
+        
 
         # Execute the blocking call using async_add_executor_job
         result = await self.hass.async_add_executor_job(self._openapi.post,
@@ -222,293 +339,3 @@ class TuyaClimate(ClimateEntity):
         #     await self.send_command(1)
 
         self.async_write_ha_state()
-    
-
-    # async def async_set_temperature(self, **kwargs):
-    #     hvac_mode = kwargs.get(ATTR_HVAC_MODE)
-    #     temperature_low = kwargs.get(ATTR_TARGET_TEMP_LOW)
-    #     temperature_high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
-
-    #     if temperature_low is not None and temperature_high is not None:
-    #         self._attr_target_temperature_low = temperature_low
-    #         self._attr_target_temperature_high = temperature_high
-    #     elif temperature_low is not None:
-    #         self._attr_target_temperature_low = temperature_low
-    #         self._attr_target_temperature_high = temperature_low
-
-    #     await self.send_command(hvac_mode=hvac_mode)
-
-    # async def async_set_temperature(self, **kwargs):
-    #     temperature = kwargs.get(ATTR_TEMPERATURE)
-    #     if temperature is not None:
-    #         # Use the temperature value to set the desired temperature for your Tuya device
-    #         await self.send_command(power=1, temperature=temperature)
-    #     else:
-    #         _LOGGER.warning("Temperature not provided in service call.")
-
-
-
-    async def async_set_fan_mode(self, fan_mode):
-        self._fan_mode = fan_mode
-        await self.hass.async_add_executor_job(self.send_command, 1)
-
-    async def async_set_swing_mode(self, swing_mode):
-        self._swing_mode = swing_mode
-        await self.hass.async_add_executor_job(self.send_command, 1)
-
-    async def async_set_hvac_mode(self, hvac_mode):
-        self._hvac_mode = hvac_mode
-        await self.hass.async_add_executor_job(self.send_command, 1)
-
-    # async def async_turn_on(self, **kwargs):
-    #     """Turn on the AC."""
-    #     await self.hass.async_add_executor_job(self.send_command, 1)
-    #     self._state = STATE_ON
-
-    #     if ATTR_TEMPERATURE in kwargs:
-    #         temperature = kwargs[ATTR_TEMPERATURE]
-    #         await self.async_set_temperature
-
-    # async def async_turn_off(self):
-    #     """Turn off the AC."""
-    #     await self.hass.async_add_executor_job(self.send_command, 0)
-    #     self._state = STATE_OFF
-
-    async def async_turn_on(self, **kwargs) -> None:
-        command_payload = {
-                "power": 1
-            }
-        body_json = json.dumps(command_payload)
-        body_dict = json.loads(body_json)
-
-        # Execute the blocking call using async_add_executor_job
-        result = await self.hass.async_add_executor_job(self._openapi.post,
-                            "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command", body_dict
-            )
-        _LOGGER.debug(result)
-        self._state = STATE_ON
-
-    async def async_turn_off(self) -> None:
-        command_payload = {
-                "power": 0,
-            
-            }
-        body_json = json.dumps(command_payload)
-        body_dict = json.loads(body_json)
-
-            # Execute the blocking call using async_add_executor_job
-        result = await self.hass.async_add_executor_job(self._openapi.post,
-                "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command", body_dict
-            )
-        _LOGGER.debug(result)
-        self._state = STATE_ON
-    
-
-
-
-
-
-
-
-# import asyncio
-# import logging
-# from datetime import timedelta
-# from tuya_connector import TuyaOpenAPI
-# import voluptuous as vol
-# from homeassistant.components.climate import ClimateEntity, PLATFORM_SCHEMA
-# from homeassistant.const import TEMP_CELSIUS, ATTR_TEMPERATURE
-# from homeassistant.const import (
-#     CONF_NAME, STATE_ON, STATE_OFF, STATE_UNKNOWN, STATE_UNAVAILABLE, ATTR_TEMPERATURE,
-#     PRECISION_TENTHS, PRECISION_HALVES, PRECISION_WHOLE)
-# from homeassistant.components.climate.const import (
-#     HVAC_MODE_OFF, HVAC_MODE_HEAT, HVAC_MODE_COOL,
-#     HVAC_MODE_DRY, HVAC_MODE_FAN_ONLY, HVAC_MODE_AUTO,
-#     SUPPORT_TARGET_TEMPERATURE, SUPPORT_FAN_MODE,
-#     SUPPORT_SWING_MODE, HVAC_MODES, ATTR_HVAC_MODE, SUPPORT_TARGET_TEMPERATURE_RANGE, SUPPORT_PRESET_MODE)
-# from homeassistant.helpers import config_validation as cv
-# from homeassistant.util import Throttle
-# import json
-
-# SUPPORT_FLAGS = 0
-# CONF_TARGET_TEMPERATURE_DP = "target_temperature_dp"
-# CONF_CURRENT_TEMPERATURE_DP = "current_temperature_dp"
-# CONF_TEMPERATURE_STEP = "temperature_step"
-# CONF_MAX_TEMP_DP = "max_temperature_dp"
-# CONF_MIN_TEMP_DP = "min_temperature_dp"
-# CONF_PRECISION = "precision"
-# CONF_TARGET_PRECISION = "target_precision"
-# CONF_HVAC_MODE_DP = "hvac_mode_dp"
-# CONF_HVAC_MODE_SET = "hvac_mode_set"
-# CONF_PRESET_DP = "preset_dp"
-# CONF_PRESET_SET = "preset_set"
-# CONF_HEURISTIC_ACTION = "heuristic_action"
-# CONF_HVAC_ACTION_DP = "hvac_action_dp"
-# CONF_HVAC_ACTION_SET = "hvac_action_set"
-# CONF_ECO_DP = "eco_dp"
-# CONF_ECO_VALUE = "eco_value"
-
-# _LOGGER = logging.getLogger("air")
-# CONF_NAME = "name"
-# CONF_ACCESS_ID = 'access_id'
-# CONF_ACCESS_KEY = 'access_key'
-# API_ENDPOINT = "https://openapi.tuyain.com"
-# CONF_DEVICE_ID = 'device_id'
-
-
-# PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-#     vol.Optional(CONF_NAME): cv.string,
-#     vol.Required(CONF_DEVICE_ID): cv.string,
-#     vol.Required(CONF_ACCESS_ID): cv.string,
-#     vol.Required(CONF_ACCESS_KEY): cv.string
-# })
-
-
-# def setup_platform(hass, config, add_entities, discovery_info=None):
-#     # Replace "your_device_id" with your actual Tuya device ID
-#     # Initialize TuyaOpenAPI
-#     access_id = config.get(CONF_ACCESS_ID)
-#     access_key = config.get(CONF_ACCESS_KEY)
-#     ac = {
-#         "name": config[CONF_NAME],
-#         "device_id": config[CONF_DEVICE_ID],
-#         "access_id": config[CONF_ACCESS_ID],
-#         "access_key": config[CONF_ACCESS_KEY]
-#     }
-#     openapi = TuyaOpenAPI(API_ENDPOINT, access_id, access_key)
-#     openapi.connect()
-#     # Create TuyaLight instance and add to entities
-#     add_entities([TuyaClimate(openapi, ac)])
-
-
-# class TuyaClimate(ClimateEntity):
-#     def __init__(self, openapi, device_id):
-#         self._openapi = openapi
-#         self._device_id = device_id
-#         self._target_temperature_low = None
-#         self._target_temperature_high = None
-#         self._fan_mode = None
-#         self._swing_mode = None
-#         self._precision = PRECISION_WHOLE
-#         self._hvac_mode = HVAC_MODE_OFF
-#         self._target_temperature = None
-#         self._attr_supported_features =  SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE | SUPPORT_TARGET_TEMPERATURE_RANGE | SUPPORT_FAN_MODE | SUPPORT_SWING_MODE
-    
-#     # @property
-#     # def unique_id(self):
-#     #     """Return a unique ID."""
-#     #     return f"tuya_climate_{self._device.d7035f8dc87bd285e2y9hf}"
-
-#     @property
-#     def name(self):
-#         """Return the name of the climate device."""
-#         return "Tuya Climate"
-
-#     @property
-#     def supported_features(self):
-#         """Return the list of supported features."""
-#         return SUPPORT_FLAGS
-
-#     @property
-#     def temperature_unit(self):
-#         """Return the unit of measurement."""
-#         return TEMP_CELSIUS
-
-#     # @property
-#     # def current_temperature(self):
-#     #     """Return the current temperature."""
-#     #     return self._temperature
-
-#     @property
-#     def hvac_mode(self):
-#         """Return the current HVAC mode."""
-#         return self._hvac_mode
-
-#     @property
-#     def hvac_modes(self):
-#         """Return the list of available HVAC modes."""
-#         return ["heat", "cool", "auto", "off"]
-    
-#     # @property
-#     # def supported_features(self):
-#     #     """Flag supported features."""
-#     #     supported_features = 0
-#     #     if self.has_config(CONF_TARGET_TEMPERATURE_DP):
-#     #         supported_features = supported_features | SUPPORT_TARGET_TEMPERATURE
-#     #     if self.has_config(CONF_MAX_TEMP_DP):
-#     #         supported_features = supported_features | SUPPORT_TARGET_TEMPERATURE_RANGE
-#     #     if self.has_config(CONF_PRESET_DP) or self.has_config(CONF_ECO_DP):
-#     #         supported_features = supported_features | SUPPORT_PRESET_MODE
-#     #     return supported_features
-
-
-#     async def async_turn_on(self):
-#         """Turn on the AC."""
-#         command_payload = {
-#           "power": 1,
-#           "mode": 0,
-#           "temp": 18,
-#           "wind": 3
-#         }
-#         body_json = json.dumps(command_payload)
-#         body_dict = json.loads(body_json)
-
-#         # Execute the blocking call using async_add_executor_job
-#         result = await self.hass.async_add_executor_job(
-#             self._openapi.post, "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command", body_dict
-#         )
-#         _LOGGER.debug(result)
-
-#     async def async_turn_off(self):
-#         """Turn on the AC."""
-#         command_payload = {
-#           "power": 0,
-#           "mode": 0,
-#           "temp": 18,
-#           "wind": 3
-#         }
-#         body_json = json.dumps(command_payload)
-#         body_dict = json.loads(body_json)
-
-#         # Execute the blocking call using async_add_executor_job
-#         result = await self.hass.async_add_executor_job(
-#             self._openapi.post, "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command", body_dict
-#         )
-#         _LOGGER.debug(result)
-
-#     async def async_set_temperature(self, **kwargs):
-#         hvac_mode = kwargs.get(ATTR_HVAC_MODE)
-#         temperature_low = kwargs.get(ATTR_TARGET_TEMP_LOW)
-#         temperature_high = kwargs.get(ATTR_TARGET_TEMP_HIGH)
-
-#         if temperature_low is not None and temperature_high is not None:
-#             self._target_temperature_low = temperature_low
-#             self._target_temperature_high = temperature_high
-#         elif temperature_low is not None:
-#             self._target_temperature_low = temperature_low
-#             self._target_temperature_high = temperature_low
-
-#         await self.send_command(hvac_mode=hvac_mode)
-
-#     async def async_set_hvac_mode(self, hvac_mode):
-#         """Set new HVAC mode."""
-#         # Implement your logic here to set the HVAC mode
-#         # This could involve sending commands to change the mode via the Tuya API
-#         self._hvac_mode = hvac_mode
-
-#     async def send_command(self, hvac_mode=None):
-#         command_payload = {
-#             "power": 0,
-#             "mode": 0,
-#             "temp": self._target_temperature,
-#             # "wind": self._fan_mode if self._fan_mode else 3,
-#             # "shake": 1 if self._swing_mode == "on" else 0,
-#         }
-
-#         body_json = json.dumps(command_payload)
-#         body_dict = json.loads(body_json)
-
-#         result = await self._openapi.post(
-#             "/v2.0/infrareds/d79634ca31ef0ae8807vlh/air-conditioners/d7af1190782799d1a6fu9u/scenes/command",
-#             body=body_dict,
-#         )
-#         _LOGGER.debug(result)
