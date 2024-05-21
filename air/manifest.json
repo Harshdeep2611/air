@@ -7,7 +7,8 @@
     "files": [
         "__init__.py",
         "climate.py",
-        "manifest.json",
-        "services.yaml"
-      ]
+        "manifest.json","service.yaml"
+        
+      ],
+      "requirements":["tuya-connector-python"]
 }
