@@ -1,1 +1,0 @@
-"""Integration for tuya light"""
