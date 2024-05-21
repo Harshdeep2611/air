@@ -2,8 +2,10 @@
     "domain": "air",
     "name": "AC",
     "documentation": "https://github.com/",
+    "issue_tracker": "https://github.com/Harshdeep2611/Custome-Integration-for-AC/issues",
     "dependencies": [],
     "version": "1.0",
+    "codeowners": ["@Harshdeep2611"],
     "files": [
         "__init__.py",
         "climate.py",
