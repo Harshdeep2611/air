@@ -2,9 +2,9 @@ A Home Assistant custom Integration for Controlling AC with help of Tuya IR blas
 
 ## Installation
 
-- Download air folder and copy paste in the Config/Custome_Components/
+- Download air folder and copy paste in the **Config/Custome_Components/**
   
-- After That edit the configuaration.yaml file in the Home-assistant/Config/
+- After that edit the **configuaration.yaml** file in the  **Home-assistant/Config/**
   
 
 ```yaml
