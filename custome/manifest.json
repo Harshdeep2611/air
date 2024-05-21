@@ -1,9 +1,0 @@
-{
-    "domain": "custome",
-    "name": "Tuya IR Air Conditioner",
-    "documentation": "https://your-documentation-url.com",
-    "dependencies": [],
-    "codeowners": [],
-    "requirements": [],
-    "version":1.0
-}
